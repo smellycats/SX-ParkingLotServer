@@ -1,0 +1,1 @@
+docker run -it -d --restart=always --name kakou_temp_ser --privileged=true -p 8086:8086 -v /home/core/GitHub:/home centos-python/smsser gunicorn -c /home/SX-KakouTempServer/gun.py --chdir /home/SX-KakouTempServer run:app
