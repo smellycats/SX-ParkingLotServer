@@ -1,1 +1,1 @@
-docker run -it -d --restart=always --name kakou_temp_ser --privileged=true -p 8086:8086 -v /home/core/GitHub:/home centos-python/smsser gunicorn -c /home/SX-KakouTempServer/gun.py --chdir /home/SX-KakouTempServer run:app
+docker run -it -d --restart=always --name parking_ser --privileged=true -p 8077:8077 -v /home/core/GitHub:/home centos-python3.6/requests:1.0 gunicorn -c /home/SX-ParkingLotServer/gun.py --chdir /home/SX-ParkingLotServer run:app
