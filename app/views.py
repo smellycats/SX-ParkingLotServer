@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import json
-from functools import wraps
 import shutil
-import random
+import uuid
+import time
+import copy
 
 import arrow
 import requests
@@ -10,11 +11,11 @@ from flask import g, request, make_response, jsonify, abort
 from flask_restful import reqparse, abort, Resource
 from passlib.hash import sha256_crypt
 from itsdangerous import TimedJSONWebSignatureSerializer as Serializer
-from sqlalchemy import func
 
 from . import db, app, auth, cache, limiter, logger, access_logger
-from models import *
-import helper_parking
+from . import helper_kafka
+from . import helper_parking
+from .models import Users
 
 
 @auth.verify_password
@@ -24,7 +25,6 @@ def verify_pw(username, password):
         g.uid = user.id
         return password == user.password
     return False
-
 
 @app.route('/')
 @limiter.limit("5000/hour")
@@ -36,155 +36,127 @@ def index_get():
     return jsonify(result), 200, header
 
 
-@app.route('/maxid', methods=['get'])
-@limiter.limit('5000/minute')
-#@limiter.exempt
-@auth.login_required
-def maxid_get():
-    try:
-        q = db.session.query(func.max(Parking.id)).first()
-	return jsonify({'maxid': q[0]}), 200
-    except Exception as e:
-	logger.exception(e)
-
-
-@app.route('/carinfo', methods=['get'])
-@limiter.limit('5000/minute')
-#@limiter.exempt
-@auth.login_required
-def carinfo_list_get():
-    q = request.args.get('q', None)
-    if q is None:
-	abort(400)
-    try:
-	args = json.loads(q)
-    except Exception as e:
-	logger.error(e)
-	abort(400)
-    try:
-        s = db.session.query(Parking)
-	if args.get('startid', None) is not None:
-	    s = s.filter(Parking.id >= args['startid'])
-	if args.get('endid', None) is not None:
-            s = s.filter(Parking.id <= args['endid'])
-
-        if len(s.all())==0:
-            return jsonify({'items': [], 'total_count': 0})
-	items = []
-        for i in s.all():
-            print i.date_created
-	    item = {
-                'id': i.id,
-                'date_created': i.date_created.strftime('%Y-%m-%d %H:%M:%S'),
-                'content': i.content
-            }
-	    items.append(item)
-
-	return jsonify({'items': items, 'total_count': len(items)})
-    except Exception as e:
-        print(e)
-	logger.exception(e)
-
-
 @app.route('/carinfo', methods=['POST'])
-@limiter.limit('5000/minute')
-#@limiter.exempt
+@limiter.exempt
 @auth.login_required
 def carinfo_post():
+    if not request.json:
+        return jsonify({'message': 'Problems parsing JSON'}), 415
+
+    if request.json.get('parkingNo', None) is None:
+        error = {
+            'resource': 'carinfo',
+            'field': 'parkingNo',
+            'code': 'missing_field'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+    if not helper_parking.parkingno_check(request.json['parkingNo']):
+        error = {
+            'resource': 'carinfo',
+            'field': 'parkingNo',
+            'code': 'invalid_data'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
+    if request.json.get('license', None) is None:
+        error = {
+            'resource': 'carinfo',
+            'field': 'license',
+            'code': 'missing_field'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+    if request.json.get('plateColor', None) is None:
+        error = {
+            'resource': 'carinfo',
+            'field': 'plateColor',
+            'code': 'missing_field'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+    if not helper_parking.platecolor_check(request.json['plateColor']):
+        error = {
+            'resource': 'carinfo',
+            'field': 'plateColor',
+            'code': 'invalid_data'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
+    if request.json.get('snapTime', None) is None:
+        error = {
+            'resource': 'carinfo',
+            'field': 'snapTime',
+            'code': 'missing_field'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+    if not helper_parking.is_valid_date(request.json['snapTime']):
+        error = {
+            'resource': 'carinfo',
+            'field': 'snapTime',
+            'code': 'invalid_data'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
+    if request.json.get('direction', None) is None:
+        error = {
+            'resource': 'carinfo',
+            'field': 'direction',
+            'code': 'missing_field'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+    if not helper_parking.direction_check(request.json['direction']):
+        error = {
+            'resource': 'carinfo',
+            'field': 'direction',
+            'code': 'invalid_data'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
+    if request.json.get('gateNo', None) is None:
+        error = {
+            'resource': 'carinfo',
+            'field': 'gateNo',
+            'code': 'missing_field'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+    if not type(request.json['gateNo']) == int:
+        error = {
+            'resource': 'carinfo',
+            'field': 'gateNo',
+            'code': 'invalid_data'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+    if request.json.get('gateName', None) is None:
+        error = {
+            'resource': 'carinfo',
+            'field': 'gateName',
+            'code': 'missing_field'
+        }
+        return jsonify({'message': 'Validation Failed', 'errors': error}), 422
     try:
-        if not request.json:
-            return jsonify({'message': 'Problems parsing JSON'}), 415
-        if request.json.get('parkingNo', None) is None:
-            error = {
-                'resource': 'carinfo',
-                'field': 'parkingNo',
-                'code': 'missing_field'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
-        if not helper_parking.parkingno_check(request.json['parkingNo']):
-            error = {
-                'resource': 'carinfo',
-                'field': 'parkingNo',
-                'code': 'invalid_data'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
-        if request.json.get('license', None) is None:
-            error = {
-                'resource': 'carinfo',
-                'field': 'license',
-                'code': 'missing_field'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
-        if request.json.get('plateColor', None) is None:
-            error = {
-                'resource': 'carinfo',
-                'field': 'plateColor',
-                'code': 'missing_field'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
-        if not helper_parking.platecolor_check(request.json['plateColor']):
-            error = {
-                'resource': 'carinfo',
-                'field': 'plateColor',
-                'code': 'invalid_data'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
-        if request.json.get('snapTime', None) is None:
-            error = {
-                'resource': 'carinfo',
-                'field': 'snapTime',
-                'code': 'missing_field'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
-        if not helper_parking.is_valid_date(request.json['snapTime']):
-            error = {
-                'resource': 'carinfo',
-                'field': 'snapTime',
-                'code': 'invalid_data'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
-        if request.json.get('direction', None) is None:
-            error = {
-                'resource': 'carinfo',
-                'field': 'direction',
-                'code': 'missing_field'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
-        if not helper_parking.direction_check(request.json['direction']):
-            error = {
-                'resource': 'carinfo',
-                'field': 'direction',
-                'code': 'invalid_data'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422 
-        if request.json.get('gateNo', None) is None:
-            error = {
-                'resource': 'carinfo',
-                'field': 'gateNo',
-                'code': 'missing_field'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
-        if not type(request.json['gateNo']) == int:
-            error = {
-                'resource': 'carinfo',
-                'field': 'gateNo',
-                'code': 'invalid_data'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
-        if request.json.get('gateName', None) is None:
-            error = {
-                'resource': 'carinfo',
-                'field': 'gateName',
-                'code': 'missing_field'
-            }
-            return jsonify({'message': 'Validation Failed', 'errors': error}), 422
+        ka = app.config['KA']
+        uid = str(uuid.uuid4())   # uuid编号
+        lost_msg = {}             # 未上传数据字典
+        def acked(err, msg):
+            if err is not None:
+                lost_msg[msg.key().decode('utf-8')] = msg.value().decode('utf-8')
+                logger.error(msg.key().decode('utf-8'))
+                logger.error(err)
+        value = {'timestamp': arrow.now('PRC').format('YYYY-MM-DD HH:mm:ss'), 'message': request.json}
+        ka.produce_info(key=uid, value=json.dumps(value), cb=acked)
+        ka.flush()
+        
+        if uid not in lost_msg:
+            return jsonify({'ret': 1, 'msg': 'ok'}), 201
 
-        p = Parking(content=json.dumps(request.json))
-        db.session.add(p)
-        db.session.commit()
+        for i in range(3):
+            del(lost_msg[uid])     # 先删除数据记录
+            value = {'timestamp': arrow.now('PRC').format('YYYY-MM-DD HH:mm:ss'), 'message': request.json}
+            ka.produce_info(key=uid, value=json.dumps(value))
+            ka.flush()
+            if uid in lost_msg:
+                time.sleep(0.1)
+            else:
+                break
     except Exception as e:
-	logger.exception(e)
-	return jsonify({'ret': 0, 'msg': 'error'}), 201
-    return jsonify({'ret': 1, 'msg': 'ok'}), 201
-
+        logger.error(e)
+        return jsonify({'ret': 0, 'msg': 'error'}), 201
+    if uid in lost_msg:
+        return jsonify({'ret': 0, 'msg': 'error'}), 201
+    else:
+        return jsonify({'ret': 1, 'msg': 'ok'}), 201
 
