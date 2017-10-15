@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import logging
 
 import arrow
@@ -9,21 +9,21 @@ from flask_limiter import Limiter, HEADERS
 from flask.ext.sqlalchemy import SQLAlchemy
 from flask.ext.cache import Cache
 
-from config import Production
-from my_logger import debug_logging, online_logging, access_logging
+from . import config
+from . import my_logger
 
 
 # create a flask application - this ``app`` object will be used to handle
 app = Flask(__name__)
-app.config.from_object(Production())
+app.config.from_object(config.Production())
 #api = Api(app)
 
 db = SQLAlchemy(app)
 
 auth = HTTPBasicAuth()
 
-debug_logging(u'logs/error.log')
-access_logging(u'logs/access.log')
+my_logger.debug_logging(u'logs/error.log')
+my_logger.access_logging(u'logs/access.log')
 
 logger = logging.getLogger('root')
 access_logger = logging.getLogger('access')
@@ -39,7 +39,21 @@ cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 
 from . import views
 
+@app.after_request
+def after_request(response):
+    """访问信息写入日志"""
+    info = u'{0} - - [{1}] "{2} {3} HTTP/1.1" {4} {5}'.format(
+        request.headers.get("X-Real-IP", request.remote_addr),
+        arrow.now('PRC').format('DD/MMM/YYYY:HH:mm:ss ZZ'), request.method,
+        request.path, response.status_code, response.content_length)
+    access_logger.info(info)
+    response.headers['Server'] = app.config['HEADER_SERVER']
+    #response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    #response.headers['Access-Control-Allow-Origin'] = '*'
+    #response.headers['Access-Control-Allow-Methods'] = 'GET, POST'
+    #response.headers['Access-Control-Allow-Headers'] = 'Origin, X-Requested-With, Content-Type, Accept'
 
+    return response
 
 
 @app.errorhandler(400)
